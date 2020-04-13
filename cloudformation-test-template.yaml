@@ -62,28 +62,7 @@ Resources:
       Role: !GetAtt LambdaExecutionRole.Arn
       Code:
         ZipFile: |
-          import boto3
-          import os
-
-          def create_secret():
-            secret_name = "development-test-secret"
-            region_name = "ca-central-1"
-            
-            session = boto3.session.Session()
-            client = session.client(
-              service_name='secretsmanager',
-              region_name=region_name,
-            )
-
-            create_secret_value_response = client.create_secret(
-              Name=secret_name,
-              KmsKeyId=os.getenv('TEST_KMS_KEY'),
-              SecretString='hello-world',
-            )
-            print(create_secret_value_response)
-
           def handler(event, context):
-            create_secret()
             message = 'Hello {} {}!'.format(event['first_name'], 
                                             event['last_name'])  
             return { 
