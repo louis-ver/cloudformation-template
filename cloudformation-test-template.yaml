@@ -1,0 +1,157 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "A lambda function in the development/test/production environment"
+
+Parameters:
+  AdminRoleNameParameter:
+    Description: "The name of the IAM role used by administrators"
+    Type: "String"
+    AllowedValues: ["AdminRole", "TestAdminRole"]
+  EnvironmentParameter:
+    Description: "The environment that this stack is running in"
+    Type: "String"
+    AllowedValues: ["development", "test", "production"]
+  IAMRolePathParameter:
+    Description: "The Path of the IAM Role"
+    Type: "String"
+    AllowedPattern: ((/[A-Za-z0-9\.,\+@=_-]+)*)/
+    MinLength: 1
+    MaxLength: 512
+    Default: '/'
+
+Resources:
+  EncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Symmetric key used to encrypt secrets
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: Complete Access
+          Effect: Allow
+          Principal:
+            AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+          Action: kms:*
+          Resource: '*'
+        - Sid: Allow administration of the key
+          Effect: Allow
+          Principal:
+            AWS: !Sub arn:aws:iam::${AWS::AccountId}:role/${AdminRoleNameParameter}
+          Action:
+          - kms:Create*
+          - kms:Describe*
+          - kms:Enable*
+          - kms:List*
+          - kms:Put*
+          - kms:Update*
+          - kms:Revoke*
+          - kms:Disable*
+          - kms:Get*
+          - kms:Delete*
+          - kms:ScheduleKeyDeletion
+          - kms:CancelKeyDeletion
+          Resource: '*'
+  EncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/${EnvironmentParameter}-encryption-key
+      TargetKeyId: !Ref EncryptionKey
+  ExampleLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      FunctionName: !Sub ${EnvironmentParameter}-example-lambda
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import os
+
+          def create_secret():
+            secret_name = "development-test-secret"
+            region_name = "ca-central-1"
+            
+            session = boto3.session.Session()
+            client = session.client(
+              service_name='secretsmanager',
+              region_name=region_name,
+            )
+
+            create_secret_value_response = client.create_secret(
+              Name=secret_name,
+              KmsKeyId=os.getenv('TEST_KMS_KEY'),
+              SecretString='hello-world',
+            )
+            print(create_secret_value_response)
+
+          def handler(event, context):
+            create_secret()
+            message = 'Hello {} {}!'.format(event['first_name'], 
+                                            event['last_name'])  
+            return { 
+                'message' : message
+            }
+      Description: "A lambda function"
+      Handler: "index.handler"
+      MemorySize: 128
+      Runtime: "python3.7"
+      Tags:
+        - {Key: "Environment", Value: !Ref EnvironmentParameter}
+        - {Key: "ResourceName", Value: "ExampleLambdaFunction"}
+        - {Key: "Stack", Value: !Ref 'AWS::StackName'}
+      Timeout: 5
+      Environment:
+        Variables:
+          RUNNING_ENVIRONMENT: !Ref EnvironmentParameter
+          TEST_KMS_KEY: !Ref EncryptionKeyAlias
+  EncryptionManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+            - kms:Decrypt
+            - kms:DescribeKey
+            - kms:Encrypt
+            - kms:GenerateDataKey*
+            - kms:ReEncrypt*
+            Resource: !GetAtt EncryptionKey.Arn
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            - Effect: Allow
+              Action:
+              - secretsmanager:CreateSecret
+              - secretsmanager:DescribeSecret
+              Resource: '*'
+              Condition:
+                StringLike:
+                  secretsmanager:Name: development*
+            - Effect: Allow
+              Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              Resource: '*'
+      Path: !Ref IAMRolePathParameter
+      ManagedPolicyArns:
+        - !Ref EncryptionManagedPolicy
+
+Outputs:
+  EncryptionManagedPolicy:
+    Description: The Managed Policy that allows encryption
+    Value: !Ref EncryptionManagedPolicy
